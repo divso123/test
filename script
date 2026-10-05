@@ -1,0 +1,3221 @@
+--============================================================
+-- MULTI-ZONE EGG STEALER
+--============================================================
+--
+-- PURPOSE:
+-- Automatically finds available eggs inside selected zones,
+-- moves to them, activates their EggPrompt, then returns
+-- to the player's own Base1.
+--
+-- MOVEMENT MODES:
+--   Tween    = Tween the character toward the destination.
+--   Walk     = Use Humanoid:MoveTo().
+--   Teleport = Teleport through zone loading points.
+--
+--============================================================
+-- TELEPORT ZONE ROUTING
+--============================================================
+--
+-- FIXED ZONE ORDER:
+--
+--   1. Forest
+--   2. Savannah
+--   3. Dessert
+--   4. Antartic
+--   5. Volcano
+--   6. Beach
+--
+-- Zone Skip controls the teleport route.
+--
+-- FORWARD EXAMPLE:
+--
+-- Beach + Skip 0:
+-- Forest -> Savannah -> Dessert -> Antartic
+-- -> Volcano -> Beach
+--
+-- Beach + Skip 2:
+-- Savannah -> Antartic -> Beach
+--
+-- Beach + Skip 4:
+-- Volcano -> Beach
+--
+-- Beach + Skip 6:
+-- Beach
+--
+--============================================================
+-- RETURN ROUTING
+--============================================================
+--
+-- The same logic is used in reverse after stealing.
+--
+-- Beach + Skip 0:
+-- Beach -> Volcano -> Antartic -> Dessert
+-- -> Savannah -> Forest -> Base
+--
+-- Beach + Skip 2:
+-- Beach -> Antartic -> Savannah -> Base
+--
+-- Beach + Skip 4:
+-- Beach -> Savannah -> Base
+--
+-- Beach + Skip 6:
+-- Beach -> Base
+--
+-- This is specifically designed to give distant zones time
+-- to load while travelling back toward the player's base.
+--
+--============================================================
+
+--============================================================
+-- SERVICES
+--============================================================
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+
+--============================================================
+-- USER SETTINGS
+--============================================================
+
+local Auto = false
+
+local MovementMode = "Tween"
+
+local TweenSpeed = 50
+
+local MovementHeight = 3
+
+local EggHeight = 3
+
+local WalkSpeed = 16
+
+local PromptDelay = 0.25
+
+--============================================================
+-- ZONE SKIP
+--============================================================
+--
+-- 0 = every zone
+-- 2 = every second zone
+-- 4 = every fourth zone
+-- 6 = only the sixth zone
+--
+-- DEFAULT: 0
+--
+--============================================================
+
+local ZoneSkip = 0
+
+local SearchPointDelay = 0.25
+
+local MaxSearchPointsPerZone = 100
+
+--============================================================
+-- SELECTED ZONES
+--============================================================
+
+local SelectedZones = {}
+
+--============================================================
+-- FIXED ZONE ORDER
+--============================================================
+
+local ZoneOrder = {
+
+    "Forest",
+
+    "Savannah",
+
+    "Dessert",
+
+    "Antartic",
+
+    "Volcano",
+
+    "Beach"
+}
+
+--============================================================
+-- GAME REFERENCES
+--============================================================
+
+local World =
+    workspace:FindFirstChild(
+        "LavaEggHeistWorld"
+    )
+
+local ZonesFolder =
+    workspace:FindFirstChild(
+        "Zones"
+    )
+
+local PlotsFolder =
+    workspace:FindFirstChild(
+        "Plots"
+    )
+
+--============================================================
+-- CHARACTER REFERENCES
+--============================================================
+
+local Character
+local Humanoid
+local Root
+
+local function updateCharacter()
+
+    Character =
+        LocalPlayer.Character
+        or LocalPlayer.CharacterAdded:Wait()
+
+    Humanoid =
+        Character:FindFirstChildOfClass(
+            "Humanoid"
+        )
+
+    Root =
+        Character:FindFirstChild(
+            "HumanoidRootPart"
+        )
+end
+
+updateCharacter()
+
+LocalPlayer.CharacterAdded:Connect(
+    function()
+
+        task.wait(0.5)
+
+        updateCharacter()
+
+    end
+)
+
+--============================================================
+-- GUI
+--============================================================
+
+local ScreenGui =
+    Instance.new("ScreenGui")
+
+ScreenGui.Name =
+    "EggStealerUI"
+
+ScreenGui.ResetOnSpawn =
+    false
+
+ScreenGui.Parent =
+    game:GetService("CoreGui")
+
+--============================================================
+-- MAIN WINDOW
+--============================================================
+
+local Main =
+    Instance.new("Frame")
+
+Main.Name =
+    "Main"
+
+Main.Size =
+    UDim2.new(
+        0,
+        330,
+        0,
+        650
+    )
+
+Main.Position =
+    UDim2.new(
+        0.5,
+        -165,
+        0.5,
+        -325
+    )
+
+Main.BackgroundColor3 =
+    Color3.fromRGB(
+        25,
+        25,
+        25
+    )
+
+Main.BorderSizePixel =
+    0
+
+Main.Parent =
+    ScreenGui
+
+local MainCorner =
+    Instance.new("UICorner")
+
+MainCorner.CornerRadius =
+    UDim.new(
+        0,
+        10
+    )
+
+MainCorner.Parent =
+    Main
+
+--============================================================
+-- TITLE
+--============================================================
+
+local Title =
+    Instance.new("TextLabel")
+
+Title.Size =
+    UDim2.new(
+        1,
+        0,
+        0,
+        45
+    )
+
+Title.BackgroundTransparency =
+    1
+
+Title.Text =
+    "🥚 Egg Stealer"
+
+Title.TextColor3 =
+    Color3.fromRGB(
+        255,
+        255,
+        255
+    )
+
+Title.TextSize =
+    22
+
+Title.Font =
+    Enum.Font.GothamBold
+
+Title.Parent =
+    Main
+
+--============================================================
+-- STATUS
+--============================================================
+
+local Status =
+    Instance.new("TextLabel")
+
+Status.Position =
+    UDim2.new(
+        0,
+        15,
+        0,
+        45
+    )
+
+Status.Size =
+    UDim2.new(
+        1,
+        -30,
+        0,
+        35
+    )
+
+Status.BackgroundTransparency =
+    1
+
+Status.Text =
+    "Status: OFF"
+
+Status.TextColor3 =
+    Color3.fromRGB(
+        255,
+        80,
+        80
+    )
+
+Status.TextSize =
+    14
+
+Status.Font =
+    Enum.Font.Gotham
+
+Status.TextWrapped =
+    true
+
+Status.Parent =
+    Main
+
+--============================================================
+-- STATUS FUNCTION
+--============================================================
+
+local function setStatus(
+    text,
+    color
+)
+
+    Status.Text =
+        "Status: " .. text
+
+    Status.TextColor3 =
+        color
+end
+
+--============================================================
+-- UI BUTTON CREATOR
+--============================================================
+
+local function createButton(
+    name,
+    text,
+    y
+)
+
+    local Button =
+        Instance.new(
+            "TextButton"
+        )
+
+    Button.Name =
+        name
+
+    Button.Position =
+        UDim2.new(
+            0,
+            15,
+            0,
+            y
+        )
+
+    Button.Size =
+        UDim2.new(
+            1,
+            -30,
+            0,
+            38
+        )
+
+    Button.BackgroundColor3 =
+        Color3.fromRGB(
+            45,
+            45,
+            45
+        )
+
+    Button.BorderSizePixel =
+        0
+
+    Button.Text =
+        text
+
+    Button.TextColor3 =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        )
+
+    Button.TextSize =
+        14
+
+    Button.Font =
+        Enum.Font.Gotham
+
+    Button.AutoButtonColor =
+        true
+
+    Button.Parent =
+        Main
+
+    local Corner =
+        Instance.new("UICorner")
+
+    Corner.CornerRadius =
+        UDim.new(
+            0,
+            7
+        )
+
+    Corner.Parent =
+        Button
+
+    return Button
+end
+
+--============================================================
+-- TEXTBOX CREATOR
+--============================================================
+
+local function createBox(
+    name,
+    placeholder,
+    value,
+    y
+)
+
+    local Box =
+        Instance.new(
+            "TextBox"
+        )
+
+    Box.Name =
+        name
+
+    Box.Position =
+        UDim2.new(
+            0,
+            15,
+            0,
+            y
+        )
+
+    Box.Size =
+        UDim2.new(
+            1,
+            -30,
+            0,
+            38
+        )
+
+    Box.BackgroundColor3 =
+        Color3.fromRGB(
+            40,
+            40,
+            40
+        )
+
+    Box.BorderSizePixel =
+        0
+
+    Box.PlaceholderText =
+        placeholder
+
+    Box.Text =
+        tostring(value)
+
+    Box.TextColor3 =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        )
+
+    Box.PlaceholderColor3 =
+        Color3.fromRGB(
+            150,
+            150,
+            150
+        )
+
+    Box.TextSize =
+        14
+
+    Box.Font =
+        Enum.Font.Gotham
+
+    Box.ClearTextOnFocus =
+        false
+
+    Box.Parent =
+        Main
+
+    local Corner =
+        Instance.new("UICorner")
+
+    Corner.CornerRadius =
+        UDim.new(
+            0,
+            7
+        )
+
+    Corner.Parent =
+        Box
+
+    return Box
+end
+
+--============================================================
+-- AUTO STEAL BUTTON
+--============================================================
+
+local AutoButton =
+    createButton(
+        "AutoButton",
+        "Auto Steal: OFF",
+        85
+    )
+
+AutoButton.MouseButton1Click:Connect(
+    function()
+
+        Auto =
+            not Auto
+
+        if Auto then
+
+            AutoButton.Text =
+                "Auto Steal: ON"
+
+            AutoButton.BackgroundColor3 =
+                Color3.fromRGB(
+                    40,
+                    130,
+                    70
+                )
+
+            if next(SelectedZones) then
+
+                setStatus(
+                    "RUNNING",
+                    Color3.fromRGB(
+                        80,
+                        255,
+                        120
+                    )
+                )
+
+            else
+
+                setStatus(
+                    "Select at least one zone",
+                    Color3.fromRGB(
+                        255,
+                        180,
+                        60
+                    )
+                )
+            end
+
+        else
+
+            AutoButton.Text =
+                "Auto Steal: OFF"
+
+            AutoButton.BackgroundColor3 =
+                Color3.fromRGB(
+                    45,
+                    45,
+                    45
+                )
+
+            setStatus(
+                "OFF",
+                Color3.fromRGB(
+                    255,
+                    80,
+                    80
+                )
+            )
+        end
+    end
+)
+
+--============================================================
+-- MOVEMENT MODE
+--============================================================
+
+local MovementButton =
+    createButton(
+        "MovementMode",
+        "Movement: Tween",
+        130
+    )
+
+local MovementModes = {
+
+    "Tween",
+
+    "Walk",
+
+    "Teleport"
+}
+
+local function updateMovementButton()
+
+    MovementButton.Text =
+        "Movement: "
+        .. MovementMode
+end
+
+MovementButton.MouseButton1Click:Connect(
+    function()
+
+        local index =
+            table.find(
+                MovementModes,
+                MovementMode
+            ) or 1
+
+        index += 1
+
+        if index > #MovementModes then
+            index = 1
+        end
+
+        MovementMode =
+            MovementModes[index]
+
+        updateMovementButton()
+    end
+)
+
+--============================================================
+-- SETTINGS
+--============================================================
+
+local TweenBox =
+    createBox(
+        "TweenSpeed",
+        "Tween Speed",
+        TweenSpeed,
+        175
+    )
+
+local HeightBox =
+    createBox(
+        "MovementHeight",
+        "Movement Height",
+        MovementHeight,
+        220
+    )
+
+local PromptBox =
+    createBox(
+        "PromptDelay",
+        "Prompt Delay",
+        PromptDelay,
+        265
+    )
+
+local SkipBox =
+    createBox(
+        "ZoneSkip",
+        "Zone Skip",
+        ZoneSkip,
+        310
+    )
+
+local SearchDelayBox =
+    createBox(
+        "SearchPointDelay",
+        "Search Point Delay",
+        SearchPointDelay,
+        355
+    )
+
+--============================================================
+-- SETTINGS VALIDATION
+--============================================================
+
+TweenBox.FocusLost:Connect(
+    function()
+
+        local value =
+            tonumber(
+                TweenBox.Text
+            )
+
+        if value
+            and value > 0 then
+
+            TweenSpeed =
+                value
+
+        else
+
+            TweenBox.Text =
+                tostring(
+                    TweenSpeed
+                )
+        end
+    end
+)
+
+HeightBox.FocusLost:Connect(
+    function()
+
+        local value =
+            tonumber(
+                HeightBox.Text
+            )
+
+        if value then
+
+            MovementHeight =
+                value
+
+        else
+
+            HeightBox.Text =
+                tostring(
+                    MovementHeight
+                )
+        end
+    end
+)
+
+PromptBox.FocusLost:Connect(
+    function()
+
+        local value =
+            tonumber(
+                PromptBox.Text
+            )
+
+        if value
+            and value >= 0 then
+
+            PromptDelay =
+                value
+
+        else
+
+            PromptBox.Text =
+                tostring(
+                    PromptDelay
+                )
+        end
+    end
+)
+
+--============================================================
+-- ZONE SKIP VALIDATION
+--============================================================
+
+SkipBox.FocusLost:Connect(
+    function()
+
+        local value =
+            tonumber(
+                SkipBox.Text
+            )
+
+        if value then
+
+            value =
+                math.floor(
+                    value
+                )
+
+            if value < 0 then
+                value = 0
+            end
+
+            if value > #ZoneOrder then
+                value = #ZoneOrder
+            end
+
+            ZoneSkip =
+                value
+
+            SkipBox.Text =
+                tostring(
+                    ZoneSkip
+                )
+
+        else
+
+            SkipBox.Text =
+                tostring(
+                    ZoneSkip
+                )
+        end
+    end
+)
+
+SearchDelayBox.FocusLost:Connect(
+    function()
+
+        local value =
+            tonumber(
+                SearchDelayBox.Text
+            )
+
+        if value
+            and value >= 0 then
+
+            SearchPointDelay =
+                value
+
+        else
+
+            SearchDelayBox.Text =
+                tostring(
+                    SearchPointDelay
+                )
+        end
+    end
+)
+
+--============================================================
+-- AVAILABLE ZONES
+--============================================================
+
+local AvailableZones = {
+
+    "Forest",
+
+    "Savannah",
+
+    "Dessert",
+
+    "Antartic",
+
+    "Volcano",
+
+    "Beach"
+}
+
+--============================================================
+-- MULTI-SELECT DROPDOWN
+--============================================================
+
+local ZoneTitle =
+    Instance.new("TextLabel")
+
+ZoneTitle.Position =
+    UDim2.new(
+        0,
+        15,
+        0,
+        400
+    )
+
+ZoneTitle.Size =
+    UDim2.new(
+        1,
+        -30,
+        0,
+        25
+    )
+
+ZoneTitle.BackgroundTransparency =
+    1
+
+ZoneTitle.Text =
+    "Select Zones (Multiple)"
+
+ZoneTitle.TextColor3 =
+    Color3.fromRGB(
+        255,
+        255,
+        255
+    )
+
+ZoneTitle.TextSize =
+    15
+
+ZoneTitle.Font =
+    Enum.Font.GothamBold
+
+ZoneTitle.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+ZoneTitle.Parent =
+    Main
+
+local ZoneDropdown =
+    createButton(
+        "ZoneDropdown",
+        "Select Zones...",
+        430
+    )
+
+local Dropdown =
+    Instance.new("Frame")
+
+Dropdown.Name =
+    "ZoneDropdownList"
+
+Dropdown.Position =
+    UDim2.new(
+        0,
+        15,
+        0,
+        472
+    )
+
+Dropdown.Size =
+    UDim2.new(
+        1,
+        -30,
+        0,
+        0
+    )
+
+Dropdown.BackgroundColor3 =
+    Color3.fromRGB(
+        35,
+        35,
+        35
+    )
+
+Dropdown.BorderSizePixel =
+    0
+
+Dropdown.ClipsDescendants =
+    true
+
+Dropdown.Visible =
+    false
+
+Dropdown.ZIndex =
+    20
+
+Dropdown.Parent =
+    Main
+
+local DropdownCorner =
+    Instance.new("UICorner")
+
+DropdownCorner.CornerRadius =
+    UDim.new(
+        0,
+        7
+    )
+
+DropdownCorner.Parent =
+    Dropdown
+
+--============================================================
+-- ZONE DROPDOWN TEXT
+--============================================================
+
+local function updateZoneDropdownText()
+
+    local selected =
+        {}
+
+    for _, zone in ipairs(
+        AvailableZones
+    ) do
+
+        if SelectedZones[zone] then
+
+            table.insert(
+                selected,
+                zone
+            )
+        end
+    end
+
+    if #selected == 0 then
+
+        ZoneDropdown.Text =
+            "Select Zones..."
+
+    else
+
+        ZoneDropdown.Text =
+            "Zones: "
+            .. table.concat(
+                selected,
+                ", "
+            )
+    end
+end
+
+--============================================================
+-- ZONE BUTTONS
+--============================================================
+
+local ZoneButtons = {}
+
+for index, zoneName in ipairs(
+    AvailableZones
+) do
+
+    local Button =
+        Instance.new(
+            "TextButton"
+        )
+
+    Button.Name =
+        zoneName .. "Selector"
+
+    Button.Position =
+        UDim2.new(
+            0,
+            5,
+            0,
+            (index - 1) * 35
+        )
+
+    Button.Size =
+        UDim2.new(
+            1,
+            -10,
+            0,
+            32
+        )
+
+    Button.BackgroundColor3 =
+        Color3.fromRGB(
+            45,
+            45,
+            45
+        )
+
+    Button.BorderSizePixel =
+        0
+
+    Button.Text =
+        "□ " .. zoneName
+
+    Button.TextColor3 =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        )
+
+    Button.TextSize =
+        13
+
+    Button.Font =
+        Enum.Font.Gotham
+
+    Button.ZIndex =
+        21
+
+    Button.Parent =
+        Dropdown
+
+    local Corner =
+        Instance.new(
+            "UICorner"
+        )
+
+    Corner.CornerRadius =
+        UDim.new(
+            0,
+            5
+        )
+
+    Corner.Parent =
+        Button
+
+    ZoneButtons[zoneName] =
+        Button
+
+    Button.MouseButton1Click:Connect(
+        function()
+
+            SelectedZones[zoneName] =
+                not SelectedZones[zoneName]
+
+            if SelectedZones[zoneName] then
+
+                Button.Text =
+                    "✓ " .. zoneName
+
+                Button.BackgroundColor3 =
+                    Color3.fromRGB(
+                        40,
+                        110,
+                        65
+                    )
+
+            else
+
+                Button.Text =
+                    "□ " .. zoneName
+
+                Button.BackgroundColor3 =
+                    Color3.fromRGB(
+                        45,
+                        45,
+                        45
+                    )
+            end
+
+            updateZoneDropdownText()
+
+            if next(SelectedZones) then
+
+                Auto =
+                    true
+
+                AutoButton.Text =
+                    "Auto Steal: ON"
+
+                AutoButton.BackgroundColor3 =
+                    Color3.fromRGB(
+                        40,
+                        130,
+                        70
+                    )
+
+                setStatus(
+                    "RUNNING",
+                    Color3.fromRGB(
+                        80,
+                        255,
+                        120
+                    )
+                )
+
+            else
+
+                Auto =
+                    false
+
+                AutoButton.Text =
+                    "Auto Steal: OFF"
+
+                AutoButton.BackgroundColor3 =
+                    Color3.fromRGB(
+                        45,
+                        45,
+                        45
+                    )
+
+                setStatus(
+                    "OFF",
+                    Color3.fromRGB(
+                        255,
+                        80,
+                        80
+                    )
+                )
+            end
+        end
+    )
+end
+
+--============================================================
+-- DROPDOWN OPEN/CLOSE
+--============================================================
+
+local DropdownOpen =
+    false
+
+ZoneDropdown.MouseButton1Click:Connect(
+    function()
+
+        DropdownOpen =
+            not DropdownOpen
+
+        Dropdown.Visible =
+            DropdownOpen
+
+        if DropdownOpen then
+
+            Dropdown.Size =
+                UDim2.new(
+                    1,
+                    -30,
+                    0,
+                    #AvailableZones * 35 + 5
+                )
+
+        else
+
+            Dropdown.Size =
+                UDim2.new(
+                    1,
+                    -30,
+                    0,
+                    0
+                )
+        end
+    end
+)
+
+--============================================================
+-- FIND ZONE FOLDER
+--============================================================
+
+local function findZoneFolder(
+    zoneName
+)
+
+    if not ZonesFolder then
+
+        ZonesFolder =
+            workspace:FindFirstChild(
+                "Zones"
+            )
+    end
+
+    if not ZonesFolder then
+        return nil
+    end
+
+    local folder =
+        ZonesFolder:FindFirstChild(
+            zoneName
+        )
+
+    if folder then
+        return folder
+    end
+
+    local wanted =
+        zoneName
+            :lower()
+            :gsub(
+                "%s+",
+                ""
+            )
+
+    for _, child in ipairs(
+        ZonesFolder:GetChildren()
+    ) do
+
+        local childName =
+            child.Name
+                :lower()
+                :gsub(
+                    "%s+",
+                    ""
+                )
+
+        if childName ==
+            wanted then
+
+            return child
+        end
+    end
+
+    return nil
+end
+
+--============================================================
+-- FIND ZONE PART
+--============================================================
+
+local function findZonePart(
+    zoneName
+)
+
+    local zoneFolder =
+        findZoneFolder(
+            zoneName
+        )
+
+    if not zoneFolder then
+        return nil
+    end
+
+    local possibleNames = {
+
+        "ForestZone",
+
+        "SavannahZone",
+
+        "Dessertzone",
+        "DesertZone",
+
+        "AntarticZone",
+        "AntarcticZone",
+
+        "VolcanoZone",
+
+        "BeachZone"
+    }
+
+    for _, name in ipairs(
+        possibleNames
+    ) do
+
+        local part =
+            zoneFolder:FindFirstChild(
+                name
+            )
+
+        if part
+            and part:IsA(
+                "BasePart"
+            ) then
+
+            return part
+        end
+    end
+
+    for _, descendant in ipairs(
+        zoneFolder:GetDescendants()
+    ) do
+
+        if descendant:IsA(
+            "BasePart"
+        ) then
+
+            if descendant.Name
+                :lower()
+                :find("zone") then
+
+                return descendant
+            end
+        end
+    end
+
+    return nil
+end
+
+--============================================================
+-- FIND ZONE SEARCH POINTS
+--============================================================
+
+local function getZoneSearchPoints(
+    zoneName
+)
+
+    local points =
+        {}
+
+    local zoneFolder =
+        findZoneFolder(
+            zoneName
+        )
+
+    if not zoneFolder then
+        return points
+    end
+
+    for _, descendant in ipairs(
+        zoneFolder:GetDescendants()
+    ) do
+
+        local lowerName =
+            descendant.Name:lower()
+
+        if lowerName:find(
+            "nest",
+            1,
+            true
+        ) then
+
+            if descendant:IsA(
+                "BasePart"
+            ) then
+
+                table.insert(
+                    points,
+                    {
+                        Position =
+                            descendant.Position,
+
+                        Name =
+                            descendant:GetFullName()
+                    }
+                )
+
+            elseif descendant:IsA(
+                "Model"
+            ) then
+
+                local pivot =
+                    descendant:GetPivot()
+
+                table.insert(
+                    points,
+                    {
+                        Position =
+                            pivot.Position,
+
+                        Name =
+                            descendant:GetFullName()
+                    }
+                )
+            end
+        end
+    end
+
+    if #points == 0 then
+
+        local zonePart =
+            findZonePart(
+                zoneName
+            )
+
+        if zonePart then
+
+            table.insert(
+                points,
+                {
+                    Position =
+                        zonePart.Position,
+
+                    Name =
+                        zonePart:GetFullName()
+                }
+            )
+        end
+    end
+
+    if #points >
+        MaxSearchPointsPerZone then
+
+        local limited =
+            {}
+
+        for i = 1,
+            MaxSearchPointsPerZone do
+
+            limited[i] =
+                points[i]
+        end
+
+        points =
+            limited
+    end
+
+    return points
+end
+
+--============================================================
+-- EGG PROMPT
+--============================================================
+
+local function getEggPrompt(
+    eggModel
+)
+
+    if not eggModel then
+        return nil
+    end
+
+    local prompt =
+        eggModel:FindFirstChild(
+            "EggPrompt",
+            true
+        )
+
+    if prompt
+        and prompt:IsA(
+            "ProximityPrompt"
+        ) then
+
+        return prompt
+    end
+
+    return nil
+end
+
+--============================================================
+-- EGG PART
+--============================================================
+
+local function getEggPart(
+    eggModel
+)
+
+    if not eggModel then
+        return nil
+    end
+
+    local egg =
+        eggModel:FindFirstChild(
+            "Egg",
+            true
+        )
+
+    if egg
+        and egg:IsA(
+            "BasePart"
+        ) then
+
+        return egg
+    end
+
+    return nil
+end
+
+--============================================================
+-- EGG FREE CHECK
+--============================================================
+
+local function isEggFree(
+    eggModel
+)
+
+    local eggPart =
+        getEggPart(
+            eggModel
+        )
+
+    if not eggPart then
+        return false
+    end
+
+    return eggPart:GetAttribute(
+        "Free"
+    ) == true
+end
+
+--============================================================
+-- ZONE BOUNDARY CHECK
+--============================================================
+
+local function isPositionInsideZone(
+    position,
+    zonePart
+)
+
+    if not zonePart
+        or not zonePart:IsA(
+            "BasePart"
+        ) then
+
+        return false
+    end
+
+    local localPosition =
+        zonePart.CFrame
+            :PointToObjectSpace(
+                position
+            )
+
+    local halfSize =
+        zonePart.Size / 2
+
+    return
+        math.abs(
+            localPosition.X
+        ) <= halfSize.X
+
+        and
+
+        math.abs(
+            localPosition.Z
+        ) <= halfSize.Z
+end
+
+--============================================================
+-- SELECTED ZONE CHECK
+--============================================================
+
+local function positionIsInSelectedZone(
+    position
+)
+
+    if not next(
+        SelectedZones
+    ) then
+
+        return false
+    end
+
+    for zoneName in pairs(
+        SelectedZones
+    ) do
+
+        local zonePart =
+            findZonePart(
+                zoneName
+            )
+
+        if zonePart
+            and isPositionInsideZone(
+                position,
+                zonePart
+            ) then
+
+            return true
+        end
+    end
+
+    return false
+end
+
+--============================================================
+-- GET AVAILABLE EGGS
+--============================================================
+
+local function getAvailableEggs()
+
+    local results =
+        {}
+
+    if not World then
+
+        World =
+            workspace:FindFirstChild(
+                "LavaEggHeistWorld"
+            )
+    end
+
+    if not World then
+        return results
+    end
+
+    local checkedModels =
+        {}
+
+    for _, descendant in ipairs(
+        World:GetDescendants()
+    ) do
+
+        local model =
+            descendant:FindFirstAncestorOfClass(
+                "Model"
+            )
+
+        if model
+            and not checkedModels[model] then
+
+            checkedModels[model] =
+                true
+
+            if model.Parent then
+
+                local eggPart =
+                    getEggPart(
+                        model
+                    )
+
+                local prompt =
+                    getEggPrompt(
+                        model
+                    )
+
+                if eggPart
+                    and prompt
+                    and isEggFree(
+                        model
+                    ) then
+
+                    if positionIsInSelectedZone(
+                        eggPart.Position
+                    ) then
+
+                        table.insert(
+                            results,
+                            {
+                                Model = model,
+                                Egg = eggPart,
+                                Prompt = prompt
+                            }
+                        )
+                    end
+                end
+            end
+        end
+    end
+
+    return results
+end
+
+--============================================================
+-- FIND CLOSEST EGG
+--============================================================
+
+local function findClosestEgg(
+    eggs
+)
+
+    if not eggs
+        or #eggs == 0 then
+
+        return nil
+    end
+
+    updateCharacter()
+
+    if not Root then
+        return eggs[1]
+    end
+
+    local closest =
+        nil
+
+    local closestDistance =
+        math.huge
+
+    for _, eggInfo in ipairs(
+        eggs
+    ) do
+
+        if eggInfo.Egg
+            and eggInfo.Egg.Parent then
+
+            local distance =
+                (
+                    Root.Position
+                    - eggInfo.Egg.Position
+                ).Magnitude
+
+            if distance <
+                closestDistance then
+
+                closestDistance =
+                    distance
+
+                closest =
+                    eggInfo
+            end
+        end
+    end
+
+    return closest
+end
+
+--============================================================
+-- FIND OWN PLOT
+--============================================================
+
+local function getOwnPlot()
+
+    if not PlotsFolder then
+
+        PlotsFolder =
+            workspace:FindFirstChild(
+                "Plots"
+            )
+    end
+
+    if not PlotsFolder then
+        return nil
+    end
+
+    for _, plot in ipairs(
+        PlotsFolder:GetChildren()
+    ) do
+
+        local fence =
+            plot:FindFirstChild(
+                "Fence"
+            )
+
+        if fence then
+
+            local base =
+                fence:FindFirstChild(
+                    "Base1"
+                )
+
+            if base
+                and base:IsA(
+                    "BasePart"
+                ) then
+
+                local ownerId =
+                    base:GetAttribute(
+                        "OwnerUserId"
+                    )
+
+                if tonumber(
+                    ownerId
+                ) ==
+                    LocalPlayer.UserId then
+
+                    return {
+                        Plot = plot,
+                        Fence = fence,
+                        Base = base
+                    }
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+--============================================================
+-- HEIGHT HELPER
+--============================================================
+
+local function getPositionAtHeight(
+    position,
+    height
+)
+
+    return Vector3.new(
+        position.X,
+        position.Y + height,
+        position.Z
+    )
+end
+
+--============================================================
+-- DIRECT TELEPORT
+--============================================================
+
+local function teleportTo(
+    position,
+    height
+)
+
+    updateCharacter()
+
+    if not Root then
+        return false
+    end
+
+    local target =
+        getPositionAtHeight(
+            position,
+            height
+        )
+
+    Root.CFrame =
+        CFrame.new(
+            target
+        )
+
+    return true
+end
+
+--============================================================
+-- TWEEN MOVEMENT
+--============================================================
+
+local ActiveTween
+
+local function tweenTo(
+    position,
+    height
+)
+
+    updateCharacter()
+
+    if not Root then
+        return false
+    end
+
+    if ActiveTween then
+
+        pcall(function()
+
+            ActiveTween:Cancel()
+
+        end)
+
+        ActiveTween = nil
+    end
+
+    local target =
+        getPositionAtHeight(
+            position,
+            height
+        )
+
+    local distance =
+        (
+            Root.Position
+            - target
+        ).Magnitude
+
+    if distance <= 1 then
+        return true
+    end
+
+    local duration =
+        distance / TweenSpeed
+
+    if duration < 0.05 then
+        duration = 0.05
+    end
+
+    ActiveTween =
+        TweenService:Create(
+            Root,
+
+            TweenInfo.new(
+                duration,
+                Enum.EasingStyle.Linear,
+                Enum.EasingDirection.Out
+            ),
+
+            {
+                CFrame =
+                    CFrame.new(
+                        target
+                    )
+            }
+        )
+
+    local completed =
+        false
+
+    local connection
+
+    connection =
+        ActiveTween.Completed:Connect(
+            function()
+
+                completed =
+                    true
+
+                if connection then
+                    connection:Disconnect()
+                end
+            end
+        )
+
+    ActiveTween:Play()
+
+    while not completed do
+
+        if not Auto then
+
+            pcall(function()
+
+                ActiveTween:Cancel()
+
+            end)
+
+            if connection then
+                connection:Disconnect()
+            end
+
+            return false
+        end
+
+        task.wait()
+    end
+
+    ActiveTween = nil
+
+    return true
+end
+
+--============================================================
+-- WALK MOVEMENT
+--============================================================
+
+local function walkTo(
+    position,
+    height
+)
+
+    updateCharacter()
+
+    if not Humanoid
+        or not Root then
+
+        return false
+    end
+
+    Humanoid.WalkSpeed =
+        WalkSpeed
+
+    local target =
+        getPositionAtHeight(
+            position,
+            height
+        )
+
+    local startTime =
+        tick()
+
+    Humanoid:MoveTo(
+        target
+    )
+
+    while Auto do
+
+        updateCharacter()
+
+        if not Humanoid
+            or not Root then
+
+            return false
+        end
+
+        local distance =
+            (
+                Root.Position
+                - target
+            ).Magnitude
+
+        if distance <= 4 then
+            return true
+        end
+
+        if tick() - startTime > 30 then
+            return false
+        end
+
+        Humanoid:MoveTo(
+            target
+        )
+
+        task.wait(
+            0.1
+        )
+    end
+
+    return false
+end
+
+--============================================================
+-- GENERAL MOVEMENT
+--============================================================
+
+local function moveTo(
+    position,
+    height
+)
+
+    if MovementMode ==
+        "Tween" then
+
+        return tweenTo(
+            position,
+            height
+        )
+
+    elseif MovementMode ==
+        "Walk" then
+
+        return walkTo(
+            position,
+            height
+        )
+
+    elseif MovementMode ==
+        "Teleport" then
+
+        return teleportTo(
+            position,
+            height
+        )
+    end
+
+    return false
+end
+
+--============================================================
+-- FORWARD ZONE ROUTE
+--============================================================
+--
+-- Creates the route FROM BASE toward a target zone.
+--
+-- Beach / Skip 2:
+--
+-- Savannah -> Antartic -> Beach
+--
+--============================================================
+
+local function getZoneLoadingRoute(
+    targetZone
+)
+
+    local route =
+        {}
+
+    local targetIndex =
+        table.find(
+            ZoneOrder,
+            targetZone
+        )
+
+    if not targetIndex then
+        return route
+    end
+
+    if ZoneSkip == 0 then
+
+        for index = 1,
+            targetIndex do
+
+            table.insert(
+                route,
+                ZoneOrder[index]
+            )
+        end
+
+        return route
+    end
+
+    local index =
+        ZoneSkip
+
+    while index <=
+        targetIndex do
+
+        table.insert(
+            route,
+            ZoneOrder[index]
+        )
+
+        index +=
+            ZoneSkip
+    end
+
+    if route[#route] ~=
+        targetZone then
+
+        table.insert(
+            route,
+            targetZone
+        )
+    end
+
+    return route
+end
+
+--============================================================
+-- RETURN ZONE ROUTE
+--============================================================
+--
+-- THIS IS THE NEW PART.
+--
+-- It creates the reverse of the forward loading route.
+--
+-- Example:
+--
+-- Forward:
+-- Savannah -> Antartic -> Beach
+--
+-- Return:
+-- Beach -> Antartic -> Savannah
+--
+-- Then Base1.
+--
+--============================================================
+
+local function getReturnZoneRoute(
+    targetZone
+)
+
+    local forwardRoute =
+        getZoneLoadingRoute(
+            targetZone
+        )
+
+    local returnRoute =
+        {}
+
+    -- Reverse the forward route.
+    for index =
+        #forwardRoute,
+        1,
+        -1 do
+
+        table.insert(
+            returnRoute,
+            forwardRoute[index]
+        )
+    end
+
+    return returnRoute
+end
+
+--============================================================
+-- TELEPORT TO ZONE LOADING POINT
+--============================================================
+--
+-- Teleports directly to a zone's first loading/search point.
+--
+-- The zone itself determines where the player goes.
+-- No distance-based teleport hopping is used.
+--
+--============================================================
+
+local function teleportToZoneLoadingPoint(
+    zoneName
+)
+
+    local points =
+        getZoneSearchPoints(
+            zoneName
+        )
+
+    if #points == 0 then
+
+        setStatus(
+            "No loading point: "
+                .. zoneName,
+            Color3.fromRGB(
+                255,
+                80,
+                80
+            )
+        )
+
+        return false
+    end
+
+    setStatus(
+        "Teleporting to "
+            .. zoneName,
+        Color3.fromRGB(
+            100,
+            180,
+            255
+        )
+    )
+
+    local success =
+        teleportTo(
+            points[1].Position,
+            MovementHeight
+        )
+
+    if not success then
+        return false
+    end
+
+    task.wait(
+        SearchPointDelay
+    )
+
+    return true
+end
+
+--============================================================
+-- PREPARE TARGET ZONE
+--============================================================
+--
+-- Example:
+--
+-- Target = Beach
+-- Skip = 2
+--
+-- Savannah -> Antartic -> Beach
+--
+-- Intermediate zones are loading points.
+-- The target zone is then searched normally.
+--
+--============================================================
+
+local function prepareZoneForSearch(
+    targetZone
+)
+
+    if MovementMode ~=
+        "Teleport" then
+
+        return true
+    end
+
+    local route =
+        getZoneLoadingRoute(
+            targetZone
+        )
+
+    if #route == 0 then
+        return false
+    end
+
+    for index, zoneName in ipairs(
+        route
+    ) do
+
+        if not Auto then
+            return false
+        end
+
+        local isTarget =
+            zoneName ==
+            targetZone
+
+        if not isTarget then
+
+            setStatus(
+                "Loading "
+                    .. zoneName
+                    .. " ("
+                    .. index
+                    .. "/"
+                    .. #route
+                    .. ")",
+                Color3.fromRGB(
+                    100,
+                    180,
+                    255
+                )
+            )
+
+            teleportToZoneLoadingPoint(
+                zoneName
+            )
+
+        else
+
+            setStatus(
+                "Reached "
+                    .. zoneName,
+                Color3.fromRGB(
+                    100,
+                    180,
+                    255
+                )
+            )
+        end
+
+        if not Auto then
+            return false
+        end
+    end
+
+    return true
+end
+
+--============================================================
+-- SEARCH ONE ZONE
+--============================================================
+
+local function searchZoneForEgg(
+    zoneName
+)
+
+    local points =
+        getZoneSearchPoints(
+            zoneName
+        )
+
+    if #points == 0 then
+
+        setStatus(
+            "No search points: "
+                .. zoneName,
+            Color3.fromRGB(
+                255,
+                80,
+                80
+            )
+        )
+
+        return nil
+    end
+
+    setStatus(
+        "Searching "
+            .. zoneName
+            .. " ("
+            .. #points
+            .. " points)",
+        Color3.fromRGB(
+            255,
+            200,
+            70
+        )
+    )
+
+    for index, point in ipairs(
+        points
+    ) do
+
+        if not Auto then
+            return nil
+        end
+
+        -- Check before moving.
+        local eggs =
+            getAvailableEggs()
+
+        local egg =
+            findClosestEgg(
+                eggs
+            )
+
+        if egg then
+            return egg
+        end
+
+        --====================================================
+        -- TELEPORT
+        --====================================================
+
+        if MovementMode ==
+            "Teleport" then
+
+            teleportTo(
+                point.Position,
+                MovementHeight
+            )
+
+        --====================================================
+        -- TWEEN / WALK
+        --====================================================
+
+        else
+
+            moveTo(
+                point.Position,
+                MovementHeight
+            )
+        end
+
+        if not Auto then
+            return nil
+        end
+
+        task.wait(
+            SearchPointDelay
+        )
+
+        -- Check after moving.
+        eggs =
+            getAvailableEggs()
+
+        egg =
+            findClosestEgg(
+                eggs
+            )
+
+        if egg then
+            return egg
+        end
+    end
+
+    return nil
+end
+
+--============================================================
+-- FIND EGG
+--============================================================
+
+local function findEgg()
+
+    -- Immediate scan.
+    local eggs =
+        getAvailableEggs()
+
+    local egg =
+        findClosestEgg(
+            eggs
+        )
+
+    if egg then
+        return egg
+    end
+
+    -- Search selected zones in fixed order.
+    for _, zoneName in ipairs(
+        ZoneOrder
+    ) do
+
+        if SelectedZones[zoneName] then
+
+            if not Auto then
+                return nil
+            end
+
+            -- Load distant zones first when using Teleport.
+            if MovementMode ==
+                "Teleport" then
+
+                local prepared =
+                    prepareZoneForSearch(
+                        zoneName
+                    )
+
+                if not prepared then
+
+                    if not Auto then
+                        return nil
+                    end
+                end
+            end
+
+            -- Search the actual target zone.
+            egg =
+                searchZoneForEgg(
+                    zoneName
+                )
+
+            if egg then
+                return egg
+            end
+        end
+
+        if not Auto then
+            return nil
+        end
+    end
+
+    return nil
+end
+
+--============================================================
+-- RETURN THROUGH ZONE SKIP ROUTE
+--============================================================
+--
+-- THIS IS THE IMPORTANT NEW RETURN SYSTEM.
+--
+-- The player does NOT immediately teleport from the egg
+-- to Base1.
+--
+-- Instead:
+--
+-- 1. Determine the egg's target zone.
+-- 2. Build the forward Zone Skip route.
+-- 3. Reverse that route.
+-- 4. Teleport through the zones in reverse order.
+-- 5. Finally teleport to Base1.
+--
+--============================================================
+
+local function returnToBaseWithZoneSkip(
+    eggZoneName,
+    base
+)
+
+    if not base
+        or not base.Parent then
+
+        return false
+    end
+
+    --========================================================
+    -- BUILD REVERSE ROUTE
+    --========================================================
+
+    local returnRoute =
+        getReturnZoneRoute(
+            eggZoneName
+        )
+
+    --========================================================
+    -- TRAVEL THROUGH ZONES
+    --========================================================
+
+    for index, zoneName in ipairs(
+        returnRoute
+    ) do
+
+        if not Auto then
+            return false
+        end
+
+        setStatus(
+            "Returning "
+                .. zoneName
+                .. " ("
+                .. index
+                .. "/"
+                .. #returnRoute
+                .. ")",
+            Color3.fromRGB(
+                100,
+                180,
+                255
+            )
+        )
+
+        local success =
+            teleportToZoneLoadingPoint(
+                zoneName
+            )
+
+        if not success then
+
+            -- Continue to the next route point rather than
+            -- immediately abandoning the base return.
+            if not Auto then
+                return false
+            end
+        end
+
+        task.wait(
+            SearchPointDelay
+        )
+    end
+
+    --========================================================
+    -- FINAL BASE TELEPORT
+    --========================================================
+
+    if not Auto then
+        return false
+    end
+
+    -- Refresh the plot before the final teleport.
+    local freshPlot =
+        getOwnPlot()
+
+    if freshPlot
+        and freshPlot.Base then
+
+        base =
+            freshPlot.Base
+    end
+
+    setStatus(
+        "Teleporting to base",
+        Color3.fromRGB(
+            100,
+            180,
+            255
+        )
+    )
+
+    local success =
+        teleportTo(
+            base.Position,
+            MovementHeight
+        )
+
+    if not success then
+        return false
+    end
+
+    task.wait(
+        SearchPointDelay
+    )
+
+    -- Verify that we actually ended near Base1.
+    updateCharacter()
+
+    if Root
+        and base
+        and base.Parent then
+
+        local distance =
+            (
+                Root.Position
+                - getPositionAtHeight(
+                    base.Position,
+                    MovementHeight
+                )
+            ).Magnitude
+
+        if distance <= 10 then
+
+            return true
+        end
+    end
+
+    -- One final retry using the fresh Base1 position.
+    local retryPlot =
+        getOwnPlot()
+
+    if retryPlot
+        and retryPlot.Base then
+
+        setStatus(
+            "Retrying base teleport",
+            Color3.fromRGB(
+                255,
+                200,
+                70
+            )
+        )
+
+        teleportTo(
+            retryPlot.Base.Position,
+            MovementHeight
+        )
+
+        task.wait(
+            SearchPointDelay
+        )
+
+        updateCharacter()
+
+        if Root then
+
+            local retryDistance =
+                (
+                    Root.Position
+                    - getPositionAtHeight(
+                        retryPlot.Base.Position,
+                        MovementHeight
+                    )
+                ).Magnitude
+
+            if retryDistance <= 10 then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+--============================================================
+-- DETERMINE EGG ZONE
+--============================================================
+--
+-- Finds which selected zone contains the egg.
+--
+-- This is needed so the return route knows where to start.
+--
+--============================================================
+
+local function getEggZone(
+    eggInfo
+)
+
+    if not eggInfo
+        or not eggInfo.Egg then
+
+        return nil
+    end
+
+    local position =
+        eggInfo.Egg.Position
+
+    for _, zoneName in ipairs(
+        ZoneOrder
+    ) do
+
+        if SelectedZones[zoneName] then
+
+            local zonePart =
+                findZonePart(
+                    zoneName
+                )
+
+            if zonePart
+                and isPositionInsideZone(
+                    position,
+                    zonePart
+                ) then
+
+                return zoneName
+            end
+        end
+    end
+
+    return nil
+end
+
+--============================================================
+-- STEAL ONE EGG
+--============================================================
+
+local Stealing =
+    false
+
+local function stealEgg(
+    eggInfo
+)
+
+    if Stealing then
+        return false
+    end
+
+    if not eggInfo then
+        return false
+    end
+
+    if not eggInfo.Model
+        or not eggInfo.Model.Parent then
+
+        return false
+    end
+
+    if not eggInfo.Egg
+        or not eggInfo.Egg.Parent then
+
+        return false
+    end
+
+    if not eggInfo.Prompt
+        or not eggInfo.Prompt.Parent then
+
+        return false
+    end
+
+    if not isEggFree(
+        eggInfo.Model
+    ) then
+
+        return false
+    end
+
+    if not positionIsInSelectedZone(
+        eggInfo.Egg.Position
+    ) then
+
+        return false
+    end
+
+    -- Determine the zone BEFORE stealing.
+    local eggZone =
+        getEggZone(
+            eggInfo
+        )
+
+    if not eggZone then
+
+        setStatus(
+            "Egg zone not found",
+            Color3.fromRGB(
+                255,
+                80,
+                80
+            )
+        )
+
+        return false
+    end
+
+    Stealing =
+        true
+
+    --========================================================
+    -- GO TO EGG
+    --========================================================
+
+    setStatus(
+        "Going to egg...",
+        Color3.fromRGB(
+            255,
+            210,
+            70
+        )
+    )
+
+    local success
+
+    if MovementMode ==
+        "Teleport" then
+
+        success =
+            teleportTo(
+                eggInfo.Egg.Position,
+                MovementHeight
+            )
+
+    else
+
+        success =
+            moveTo(
+                eggInfo.Egg.Position,
+                MovementHeight
+            )
+    end
+
+    if not success then
+
+        Stealing =
+            false
+
+        return false
+    end
+
+    if not Auto then
+
+        Stealing =
+            false
+
+        return false
+    end
+
+    --========================================================
+    -- MOVE TO NORMAL STEAL HEIGHT
+    --========================================================
+
+    success =
+        moveTo(
+            eggInfo.Egg.Position,
+            EggHeight
+        )
+
+    if not success then
+
+        Stealing =
+            false
+
+        return false
+    end
+
+    task.wait(
+        PromptDelay
+    )
+
+    if not Auto then
+
+        Stealing =
+            false
+
+        return false
+    end
+
+    --========================================================
+    -- FIRE EGG PROMPT
+    --========================================================
+
+    setStatus(
+        "Stealing egg...",
+        Color3.fromRGB(
+            255,
+            210,
+            70
+        )
+    )
+
+    pcall(
+        function()
+
+            fireproximityprompt(
+                eggInfo.Prompt
+            )
+
+        end
+    )
+
+    task.wait(
+        0.45
+    )
+
+    if not Auto then
+
+        Stealing =
+            false
+
+        return false
+    end
+
+    --========================================================
+    -- FIND OWN BASE
+    --========================================================
+
+    local plot =
+        getOwnPlot()
+
+    if not plot then
+
+        setStatus(
+            "Own base not found",
+            Color3.fromRGB(
+                255,
+                80,
+                80
+            )
+        )
+
+        Stealing =
+            false
+
+        return false
+    end
+
+    --========================================================
+    -- RETURN
+    --========================================================
+
+    setStatus(
+        "Returning from "
+            .. eggZone,
+        Color3.fromRGB(
+            100,
+            180,
+            255
+        )
+    )
+
+    local returned
+
+    if MovementMode ==
+        "Teleport" then
+
+        --====================================================
+        -- NEW:
+        -- RETURN USING THE REVERSE ZONE SKIP ROUTE.
+        --====================================================
+
+        returned =
+            returnToBaseWithZoneSkip(
+                eggZone,
+                plot.Base
+            )
+
+    else
+
+        -- Tween and Walk continue to return directly.
+        returned =
+            moveTo(
+                plot.Base.Position,
+                MovementHeight
+            )
+    end
+
+    if returned then
+
+        setStatus(
+            "At base",
+            Color3.fromRGB(
+                80,
+                255,
+                120
+            )
+
+        )
+
+    else
+
+        setStatus(
+            "Base return failed",
+            Color3.fromRGB(
+                255,
+                80,
+                80
+            )
+        )
+    end
+
+    task.wait(
+        0.25
+    )
+
+    Stealing =
+        false
+
+    return returned
+end
+
+--============================================================
+-- AUTO LOOP
+--============================================================
+
+task.spawn(
+    function()
+
+        while true do
+
+            if Auto then
+
+                if not next(
+                    SelectedZones
+                ) then
+
+                    setStatus(
+                        "Select a zone",
+                        Color3.fromRGB(
+                            255,
+                            180,
+                            60
+                        )
+                    )
+
+                    task.wait(
+                        0.5
+                    )
+
+                else
+
+                    local egg =
+                        findEgg()
+
+                    if egg then
+
+                        stealEgg(
+                            egg
+                        )
+
+                    else
+
+                        setStatus(
+                            "No free egg found",
+                            Color3.fromRGB(
+                                255,
+                                180,
+                                60
+                            )
+                        )
+
+                        task.wait(
+                            0.5
+                        )
+                    end
+                end
+
+            else
+
+                task.wait(
+                    0.25
+                )
+            end
+        end
+    end
+)
+
+--============================================================
+-- DRAGGABLE UI
+--============================================================
+
+local dragging =
+    false
+
+local dragStart
+local startPosition
+
+Title.InputBegan:Connect(
+    function(input)
+
+        if input.UserInputType ==
+            Enum.UserInputType.MouseButton1
+
+            or
+
+            input.UserInputType ==
+            Enum.UserInputType.Touch then
+
+            dragging =
+                true
+
+            dragStart =
+                input.Position
+
+            startPosition =
+                Main.Position
+
+            input.Changed:Connect(
+                function()
+
+                    if input.UserInputState ==
+                        Enum.UserInputState.End then
+
+                        dragging =
+                            false
+                    end
+                end
+            )
+        end
+    end
+)
+
+UserInputService.InputChanged:Connect(
+    function(input)
+
+        if not dragging then
+            return
+        end
+
+        if input.UserInputType ~=
+            Enum.UserInputType.MouseMovement
+
+            and
+
+            input.UserInputType ~=
+            Enum.UserInputType.Touch then
+
+            return
+        end
+
+        local delta =
+            input.Position
+            - dragStart
+
+        Main.Position =
+            UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset
+                    + delta.X,
+
+                startPosition.Y.Scale,
+                startPosition.Y.Offset
+                    + delta.Y
+            )
+    end
+)
+
+--============================================================
+-- INITIAL UI STATE
+--============================================================
+
+updateMovementButton()
+
+updateZoneDropdownText()
+
+setStatus(
+    "OFF",
+    Color3.fromRGB(
+        255,
+        80,
+        80
+    )
+)
+--============================================================
+-- END
+--============================================================
